@@ -1,13 +1,13 @@
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional
-from .rag_system import RAGSystem
-from .discord_fetcher import DiscordFetcher
-from .bot_manager import BotManager
-from .scheduler import MessageScheduler
-import asyncio
+from src.rag_system import RAGSystem
+from src.discord_fetcher import DiscordFetcher
+from src.bot_manager import BotManager
+from src.scheduler import MessageScheduler
 import os
 from dotenv import load_dotenv
+import requests
 
 load_dotenv()
 
@@ -18,6 +18,7 @@ scheduler = MessageScheduler()
 
 class Question(BaseModel):
     text: str
+    model: Optional[str] = "auto"  # "auto", "openai", or "sentence-transformers"
 
 class QuestionResponse(BaseModel):
     answer: str
@@ -25,47 +26,49 @@ class QuestionResponse(BaseModel):
 class MirrorChannelRequest(BaseModel):
     user_id: str
     source_channel_id: int
-    source_guild_id: int  # Server where the source channel is
-    target_guild_id: int  # Server where you want to create the mirror channel
+    source_guild_id: int
+    target_guild_id: int
     bot_token: str
-    category_id: Optional[int] = None  # Optional category to create the channel in
+    category_id: Optional[int] = None
 
 @app.post("/ask", response_model=QuestionResponse)
-async def ask_question(question: Question):
+def ask_question(question: Question):
     """Ask a question about Solana"""
     try:
-        answer = rag_system.generate_response(question.text)
+        answer = rag_system.generate_response(question.text, question.model)    
         return QuestionResponse(answer=answer)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/fetch-messages")
-async def fetch_messages():
-    """Fetch new messages from Discord and update the knowledge base"""
+@app.post("/update-knowledge-base")
+def update_knowledge_base():
+    """Fetch messages from Postgres Database and update the pinecone knowledge base"""
     try:
         bot = DiscordFetcher()
-        await bot.start(os.getenv('DISCORD_TOKEN'))
+        bot.start(os.getenv('DISCORD_TOKEN'))
         
-        channel_id = int(os.getenv('SOLANA_CHANNEL_ID'))
-        messages = await bot.fetch_channel_messages(channel_id)
-        
-        # Process and store messages
+        # channel_id = int(os.getenv('SOLANA_CHANNEL_ID'))
+        # messages = bot.fetch_channel_messages(channel_id)  
+
+        messages = scheduler.fetch_messages_from_database(limit=100)
+
+        # Process and store messages in the pinecone database
         rag_system.process_and_store_messages(messages)
         
-        await bot.close()
+        bot.close()
         return {"status": "success", "message": f"Processed {len(messages)} messages"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/setup-mirror")
-async def setup_mirror_channel(request: MirrorChannelRequest):
+def setup_mirror_channel(request: MirrorChannelRequest):
     """Set up a mirror channel for a user"""
     try:
         # Create bot for user if it doesn't exist
-        await bot_manager.create_bot_for_user(request.user_id, request.bot_token)
+        bot_manager.create_bot_for_user(request.user_id, request.bot_token)
         
         # Create mirror channel
-        mirror_channel_id = await bot_manager.setup_mirror_channel(
+        mirror_channel_id = bot_manager.setup_mirror_channel(
             request.user_id,
             request.source_channel_id,
             request.source_guild_id,
@@ -82,14 +85,43 @@ async def setup_mirror_channel(request: MirrorChannelRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/process-messages")
-async def process_messages():
+def process_messages():
     """Manually trigger message processing from the API"""
     try:
-        messages = await scheduler.fetch_messages_from_api()
-        await scheduler.process_messages(messages)
+        messages = scheduler.fetch_messages_from_api(
+            headers={"Authorization": os.getenv('MESSAGE_API_TOKEN')},
+            params={"limit": 100}
+        )
+        scheduler.process_messages(messages)
         return {
             "status": "success",
             "message": f"Processed {len(messages)} messages"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/check-pinecone")
+def check_pinecone():
+    """Check Pinecone index statistics"""
+    try:
+        stats = rag_system.text_processor.check_index_stats()
+        return {
+            "status": "success",
+            "index_name": os.getenv('PINECONE_INDEX_NAME'),
+            "total_vectors": stats['total_vector_count'],
+            "dimension": stats['dimension']
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/create-pinecone-index")
+def create_pinecone_index(dimension: Optional[int] = 384):
+    """Create a new Pinecone index with the correct dimension"""
+    try:
+        rag_system.text_processor.create_index(dimension)
+        return {
+            "status": "success",
+            "message": "Pinecone index created successfully"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

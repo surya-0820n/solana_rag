@@ -4,17 +4,16 @@ import asyncio
 from datetime import datetime
 from typing import List, Dict, Any
 import os
-from dotenv import load_dotenv
-from ..database.models import Message, User, Reaction
-from ..database.connection import SessionLocal
-
-load_dotenv()
+from database.models import Message, User, Reaction
+from database.connection import SessionLocal
+from loguru import logger
 
 class DiscordFetcher(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(command_prefix='!', intents=intents)
+        logger.info("DiscordFetcher initialized")
         
     async def fetch_channel_messages(self, channel_id: int, limit: int = 100) -> List[Dict[str, Any]]:
         """Fetch messages from a specific channel"""

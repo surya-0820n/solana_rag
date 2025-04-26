@@ -1,126 +1,100 @@
-import discord
-from discord.ext import commands
-import asyncio
-from typing import Dict, Optional
 import os
 from dotenv import load_dotenv
-from ..database.models import Message, User
-from ..database.connection import SessionLocal
+from database.models import Message, User
+from database.connection import SessionLocal
+import discord
+from typing import Dict, Optional
+from loguru import logger
 
 load_dotenv()
 
 class BotManager:
     def __init__(self):
-        self.bots: Dict[str, commands.Bot] = {}
-        self.mirror_channels: Dict[str, Dict[str, int]] = {}  # {user_id: {source_channel_id: mirror_channel_id}}
+        self.bots: Dict[str, discord.Client] = {}
+        logger.info("Initialized BotManager")
         
-    async def create_bot_for_user(self, user_id: str, token: str) -> commands.Bot:
-        """Create a new bot for a user if it doesn't exist"""
-        if user_id in self.bots:
-            return self.bots[user_id]
+    def create_bot_for_user(self, user_id: str, bot_token: str):
+        """Create a new bot instance for a user"""
+        if user_id not in self.bots:
+            logger.info(f"Creating new bot for user {user_id}")
+            intents = discord.Intents.default()
+            intents.message_content = True
+            bot = discord.Client(intents=intents)
+            bot.run(bot_token)
+            self.bots[user_id] = bot
+            logger.info(f"Bot created successfully for user {user_id}")
             
-        intents = discord.Intents.default()
-        intents.message_content = True
-        bot = commands.Bot(command_prefix='!', intents=intents)
-        
-        @bot.event
-        async def on_ready():
-            print(f'Bot {bot.user} is ready!')
-            
-        await bot.start(token)
-        self.bots[user_id] = bot
-        return bot
-        
-    async def setup_mirror_channel(
-        self,
-        user_id: str,
-        source_channel_id: int,
-        source_guild_id: int,
-        target_guild_id: int,
-        category_id: Optional[int] = None
-    ) -> int:
-        """Create a mirror channel for a source channel"""
+    def setup_mirror_channel(self, 
+                           user_id: str,
+                           source_channel_id: int,
+                           source_guild_id: int,
+                           target_guild_id: int,
+                           category_id: Optional[int] = None) -> int:
+        """Set up a mirror channel for a user"""
+        logger.info(f"Setting up mirror channel for user {user_id}")
         bot = self.bots.get(user_id)
         if not bot:
-            raise ValueError(f"No bot found for user {user_id}")
+            logger.error(f"No bot found for user {user_id}")
+            raise Exception("Bot not found for user")
             
-        # Get source channel info
-        source_guild = bot.get_guild(source_guild_id)
-        if not source_guild:
-            raise ValueError(f"Source guild {source_guild_id} not found")
-            
-        source_channel = source_guild.get_channel(source_channel_id)
+        # Get source channel
+        source_channel = bot.get_channel(source_channel_id)
         if not source_channel:
-            raise ValueError(f"Source channel {source_channel_id} not found")
+            logger.error(f"Source channel {source_channel_id} not found")
+            raise Exception("Source channel not found")
             
         # Get target guild
         target_guild = bot.get_guild(target_guild_id)
         if not target_guild:
-            raise ValueError(f"Target guild {target_guild_id} not found")
+            logger.error(f"Target guild {target_guild_id} not found")
+            raise Exception("Target guild not found")
             
-        # Get category if specified
-        category = None
-        if category_id:
-            category = target_guild.get_channel(category_id)
-            if not category:
-                raise ValueError(f"Category {category_id} not found")
-        
         # Create mirror channel
-        mirror_channel = await target_guild.create_text_channel(
+        logger.info(f"Creating mirror channel in guild {target_guild_id}")
+        mirror_channel = target_guild.create_text_channel(
             name=f"mirror-{source_channel.name}",
-            topic=f"Mirror of {source_channel.name} from {source_guild.name}",
-            category=category
+            category=target_guild.get_channel(category_id) if category_id else None
         )
         
-        # Store mapping
-        if user_id not in self.mirror_channels:
-            self.mirror_channels[user_id] = {}
-        self.mirror_channels[user_id][str(source_channel_id)] = mirror_channel.id
-        
+        logger.info(f"Mirror channel created successfully with ID {mirror_channel.id}")
         return mirror_channel.id
         
-    async def post_message_to_mirror(self, user_id: str, message: Message):
-        """Post a message to its mirror channel"""
-        if user_id not in self.mirror_channels:
-            return
-            
-        source_channel_id = str(message.channel_id)
-        if source_channel_id not in self.mirror_channels[user_id]:
-            return
-            
+    def post_message_to_mirror(self, user_id: str, message: Message):
+        """Post a message to all mirror channels for a user"""
+        logger.debug(f"Posting message {message.id} to mirror channels for user {user_id}")
         bot = self.bots.get(user_id)
         if not bot:
+            logger.warning(f"No bot found for user {user_id}")
             return
             
-        mirror_channel_id = self.mirror_channels[user_id][source_channel_id]
-        mirror_channel = bot.get_channel(mirror_channel_id)
-        if not mirror_channel:
-            return
-            
-        # Create embed for the message
-        embed = discord.Embed(
-            description=message.content,
-            timestamp=message.timestamp,
-            color=discord.Color.blue()
-        )
-        
-        # Add author information
         db = SessionLocal()
         try:
-            author = db.query(User).filter(User.id == message.author_id).first()
-            if author:
-                embed.set_author(
-                    name=author.global_name or author.username,
-                    icon_url=author.avatar if author.avatar else None
-                )
+            # Get all mirror channels for this user
+            mirror_channels = db.query(MirrorChannel).filter(
+                MirrorChannel.user_id == user_id,
+                MirrorChannel.source_channel_id == message.channel_id
+            ).all()
+            
+            for mirror_channel in mirror_channels:
+                channel = bot.get_channel(mirror_channel.target_channel_id)
+                if channel:
+                    logger.debug(f"Posting to mirror channel {mirror_channel.target_channel_id}")
+                    channel.send(message.content)
+                else:
+                    logger.warning(f"Mirror channel {mirror_channel.target_channel_id} not found")
+        except Exception as e:
+            logger.error(f"Error posting to mirror channels: {str(e)}")
         finally:
             db.close()
             
-        await mirror_channel.send(embed=embed)
-        
-    async def cleanup(self):
-        """Cleanup all bots"""
+    def cleanup(self):
+        """Cleanup all bot instances"""
+        logger.info("Cleaning up bot instances")
         for bot in self.bots.values():
-            await bot.close()
+            try:
+                bot.close()
+                logger.info("Bot closed successfully")
+            except Exception as e:
+                logger.error(f"Error closing bot: {str(e)}")
         self.bots.clear()
-        self.mirror_channels.clear() 
+        logger.info("All bots cleaned up") 
