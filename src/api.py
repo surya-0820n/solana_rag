@@ -19,9 +19,12 @@ scheduler = MessageScheduler()
 class Question(BaseModel):
     text: str
     model: Optional[str] = "auto"  # "auto", "openai", or "sentence-transformers"
+    provide_relevant_context: bool = False
+    top_k: int = 3
 
 class QuestionResponse(BaseModel):
     answer: str
+    relevant_context: Optional[list] = None
 
 class MirrorChannelRequest(BaseModel):
     user_id: str
@@ -35,8 +38,24 @@ class MirrorChannelRequest(BaseModel):
 def ask_question(question: Question):
     """Ask a question about Solana"""
     try:
-        answer = rag_system.generate_response(question.text, question.model)    
-        return QuestionResponse(answer=answer)
+        if question.provide_relevant_context:
+            answer, context_matches = rag_system.generate_response_with_context(
+                question.text, question.model, question.top_k
+            )
+            # Format context for API response (not as a string, but as a list of dicts)
+            relevant_context = [
+                {
+                    "text": match.metadata.get("text", ""),
+                    "author": match.metadata.get("author", "Unknown"),
+                    "timestamp": match.metadata.get("timestamp", "Unknown"),
+                    "score": match.score,
+                }
+                for match in context_matches
+            ]
+            return QuestionResponse(answer=answer, relevant_context=relevant_context)
+        else:
+            answer = rag_system.generate_response(question.text, question.model)
+            return QuestionResponse(answer=answer)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

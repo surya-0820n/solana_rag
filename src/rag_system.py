@@ -112,4 +112,25 @@ class RAGSystem:
                 message = message_dict
 
             chunks = self.text_processor.process_message(message)
-            self.text_processor.upsert_to_pinecone(chunks) 
+            self.text_processor.upsert_to_pinecone(chunks)
+    
+    def generate_response_with_context(self, question: str, model: str = "auto", top_k: int = 3):
+        """
+        Generate response and return both the answer and the top_k relevant context matches.
+        """
+        try:
+            matches = self.text_processor.index.query(
+                vector=self.text_processor.model.encode(question).tolist(),
+                top_k=top_k,
+                include_metadata=True
+            ).matches
+
+            context = self.format_context(matches)
+            if model == "sentence-transformers":
+                answer = self.generate_sentence_transformers_response(question, context)
+            else:
+                answer = self.generate_openai_response(question, context, model)
+            return answer, matches
+        except Exception as e:
+            logger.error(f"Error generating response with context: {str(e)}")
+            raise 
