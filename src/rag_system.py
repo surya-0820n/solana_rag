@@ -1,5 +1,6 @@
 from typing import List, Dict, Any
 from .text_processor import TextProcessor
+from .twitter_processor import TwitterProcessor
 import os
 from tqdm import tqdm
 from loguru import logger
@@ -10,6 +11,7 @@ import httpx
 class RAGSystem:
     def __init__(self):
         self.text_processor = TextProcessor()
+        self.twitter_processor = TwitterProcessor()
         self.use_openai = bool(os.getenv('OPENAI_API_KEY'))
         self.openai_client = None
         if self.use_openai:
@@ -27,19 +29,29 @@ class RAGSystem:
         logger.info(f"RAG System initialized with OpenAI support: {self.use_openai}")
         
         # Load sentence-transformers model
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.model = SentenceTransformer(os.getenv('EMBEDDING_MODEL', 'all-MiniLM-L6-v2'))
         
         logger.info("RAGSystem initialized with sentence-transformers")
         
-    def format_context(self, matches: List[Dict[str, Any]]) -> str:
-        """Format retrieved context for the language model"""
-        context = "Here are some relevant excerpts from Solana community discussions:\n\n"
+    def format_context(self, discord_matches: List[Dict[str, Any]], tweet_matches: List[Dict[str, Any]]) -> str:
+        """Format retrieved context from both Discord and Twitter"""
+        context = "Here are some relevant excerpts:\n\n"
         
-        for i, match in enumerate(matches, 1):
-            context += f"{i}. {match.metadata['text']}\n"
-            context += f"   - From: {match.metadata['author']}\n"
-            context += f"   - Date: {match.metadata['timestamp']}\n\n"
-            
+        if discord_matches:
+            context += "From Discord discussions:\n\n"
+            for i, match in enumerate(discord_matches, 1):
+                context += f"{i}. {match.metadata['text']}\n"
+                context += f"   - From: {match.metadata['author']}\n"
+                context += f"   - Date: {match.metadata['timestamp']}\n\n"
+                
+        if tweet_matches:
+            context += "From Twitter:\n\n"
+            for i, tweet in enumerate(tweet_matches, 1):
+                context += f"{i}. {tweet['text']}\n"
+                context += f"   - From: @{tweet['author']}\n"
+                context += f"   - Date: {tweet['created_at']}\n"
+                context += f"   - Likes: {tweet['metrics']['like_count']}\n\n"
+                
         return context
     
     def generate_openai_response(self, question: str, context: str, model: str = "gpt-4o-mini") -> str:
@@ -114,23 +126,46 @@ class RAGSystem:
             chunks = self.text_processor.process_message(message)
             self.text_processor.upsert_to_pinecone(chunks)
     
-    def generate_response_with_context(self, question: str, model: str = "auto", top_k: int = 3):
+    def generate_response_with_context(self, question: str, model: str = "auto", top_k: int = 3, 
+                                     data_source_priority: str = "both") -> tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
-        Generate response and return both the answer and the top_k relevant context matches.
+        Generate response and return both the answer and relevant context from both sources
+        
+        Args:
+            question (str): The question to answer
+            model (str): The model to use for generation
+            top_k (int): Number of relevant items to retrieve from each source
+            data_source_priority (str): Which data source to prioritize ("discord", "twitter", or "both")
+            
+        Returns:
+            tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]: The answer and relevant context from both sources
         """
         try:
-            matches = self.text_processor.index.query(
-                vector=self.text_processor.model.encode(question).tolist(),
-                top_k=top_k,
-                include_metadata=True
-            ).matches
-
-            context = self.format_context(matches)
+            # Get relevant context from both sources
+            discord_matches = []
+            tweet_matches = []
+            
+            if data_source_priority in ["discord", "both"]:
+                discord_matches = self.text_processor.index.query(
+                    vector=self.model.encode(question).tolist(),
+                    top_k=top_k,
+                    include_metadata=True
+                ).matches
+                
+            if data_source_priority in ["twitter", "both"]:
+                tweet_matches = self.twitter_processor.get_relevant_tweets(question, top_k)
+            
+            # Format context for LLM
+            context = self.format_context(discord_matches, tweet_matches)
+            
+            # Generate response
             if model == "sentence-transformers":
                 answer = self.generate_sentence_transformers_response(question, context)
             else:
                 answer = self.generate_openai_response(question, context, model)
-            return answer, matches
+                
+            return answer, discord_matches, tweet_matches
+            
         except Exception as e:
             logger.error(f"Error generating response with context: {str(e)}")
             raise 

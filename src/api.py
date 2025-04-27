@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from src.rag_system import RAGSystem
 from src.discord_fetcher import DiscordFetcher
 from src.bot_manager import BotManager
@@ -21,10 +21,11 @@ class Question(BaseModel):
     model: Optional[str] = "auto"  # "auto", "openai", or "sentence-transformers"
     provide_relevant_context: bool = False
     top_k: int = 3
+    data_source_priority: str = "both"  # "discord", "twitter", or "both"
 
 class QuestionResponse(BaseModel):
     answer: str
-    relevant_context: Optional[list] = None
+    relevant_context: Optional[Dict[str, List[Dict[str, Any]]]] = None
 
 class MirrorChannelRequest(BaseModel):
     user_id: str
@@ -34,24 +35,36 @@ class MirrorChannelRequest(BaseModel):
     bot_token: str
     category_id: Optional[int] = None
 
+class DeleteVectorsRequest(BaseModel):
+    start_date: str  # Format: YYYY-MM-DD
+    end_date: str    # Format: YYYY-MM-DD
+
 @app.post("/ask", response_model=QuestionResponse)
 def ask_question(question: Question):
     """Ask a question about Solana"""
     try:
         if question.provide_relevant_context:
-            answer, context_matches = rag_system.generate_response_with_context(
-                question.text, question.model, question.top_k
+            answer, discord_matches, tweet_matches = rag_system.generate_response_with_context(
+                question.text, 
+                question.model,
+                question.top_k,
+                question.data_source_priority
             )
-            # Format context for API response (not as a string, but as a list of dicts)
-            relevant_context = [
-                {
-                    "text": match.metadata.get("text", ""),
-                    "author": match.metadata.get("author", "Unknown"),
-                    "timestamp": match.metadata.get("timestamp", "Unknown"),
-                    "score": match.score,
-                }
-                for match in context_matches
-            ]
+            
+            # Format context for API response
+            relevant_context = {
+                "discord": [
+                    {
+                        "text": match.metadata.get("text", ""),
+                        "author": match.metadata.get("author", "Unknown"),
+                        "timestamp": match.metadata.get("timestamp", "Unknown"),
+                        "score": match.score,
+                    }
+                    for match in discord_matches
+                ],
+                "twitter": tweet_matches
+            }
+            
             return QuestionResponse(answer=answer, relevant_context=relevant_context)
         else:
             answer = rag_system.generate_response(question.text, question.model)
@@ -141,6 +154,43 @@ def create_pinecone_index(dimension: Optional[int] = 384):
         return {
             "status": "success",
             "message": "Pinecone index created successfully"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/delete-vectors-by-date")
+def delete_vectors_by_date(request: DeleteVectorsRequest):
+    """Delete vectors from Pinecone based on their creation date range"""
+    try:
+        deleted_count = rag_system.text_processor.delete_vectors_by_date_range(
+            request.start_date,
+            request.end_date
+        )
+        return {
+            "status": "success",
+            "message": f"Deleted {deleted_count} vectors",
+            "deleted_count": deleted_count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/fetch-twitter")
+def fetch_twitter(username: str, days_back: int = 30):
+    """Fetch tweets from a specific Twitter user"""
+    try:
+        from src.twitter_fetcher import TwitterFetcher
+        fetcher = TwitterFetcher()
+        tweets = fetcher.fetch_user_tweets(username, days_back)
+        
+        # Process and store tweets
+        rag_system.twitter_processor.upsert_to_pinecone([
+            rag_system.twitter_processor.process_tweet(tweet)
+            for tweet in tweets
+        ])
+        
+        return {
+            "status": "success",
+            "message": f"Processed {len(tweets)} tweets from @{username}"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

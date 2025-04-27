@@ -7,6 +7,7 @@ from loguru import logger
 import time
 from pinecone import Pinecone, ServerlessSpec
 import uuid
+from datetime import datetime
 
 # Load environment variables
 load_dotenv()
@@ -299,4 +300,59 @@ class TextProcessor:
             self.index = pc.Index(index_name)
         except Exception as e:
             logger.error(f"Error creating index: {str(e)}")
-            raise e 
+            raise e
+
+    def delete_vectors_by_date_range(self, start_date: str, end_date: str) -> int:
+        """
+        Delete vectors from Pinecone based on their creation date range.
+        
+        Args:
+            start_date (str): Start date in ISO format (YYYY-MM-DD)
+            end_date (str): End date in ISO format (YYYY-MM-DD)
+            
+        Returns:
+            int: Number of vectors deleted
+        """
+        try:
+            # Convert dates to datetime objects
+            start_dt = datetime.fromisoformat(start_date)
+            end_dt = datetime.fromisoformat(end_date)
+            
+            # Get all vectors in the index
+            stats = self.index.describe_index_stats()
+            total_vectors = stats['total_vector_count']
+            
+            # Fetch vectors in batches
+            deleted_count = 0
+            batch_size = 1000
+            for i in range(0, total_vectors, batch_size):
+                # Get a batch of vectors
+                results = self.index.query(
+                    vector=[0.0] * 384,  # Query with zero vector to get random results
+                    top_k=batch_size,
+                    include_metadata=True,
+                    offset=i
+                )
+                
+                # Filter vectors by date range
+                vectors_to_delete = []
+                for match in results.matches:
+                    try:
+                        vector_date = datetime.fromisoformat(match.metadata.get('timestamp', ''))
+                        if start_dt <= vector_date <= end_dt:
+                            vectors_to_delete.append(match.id)
+                    except (ValueError, TypeError):
+                        continue
+                
+                # Delete vectors in the date range
+                if vectors_to_delete:
+                    self.index.delete(ids=vectors_to_delete)
+                    deleted_count += len(vectors_to_delete)
+                    logger.info(f"Deleted {len(vectors_to_delete)} vectors in batch {i//batch_size + 1}")
+            
+            logger.info(f"Total vectors deleted: {deleted_count}")
+            return deleted_count
+            
+        except Exception as e:
+            logger.error(f"Error deleting vectors by date range: {str(e)}")
+            raise 
