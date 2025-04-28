@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -46,4 +46,15 @@ class Reaction(Base):
     count = Column(Integer, default=0)
     
     # Relationships
-    message = relationship("Message", back_populates="reactions") 
+    message = relationship("Message", back_populates="reactions")
+
+class QuestionGroup(Base):
+    __tablename__ = 'question_groups'
+    
+    id = Column(Integer, primary_key=True)
+    representative_question = Column(String)
+    count = Column(Integer, default=1)
+    first_seen = Column(DateTime)
+    last_seen = Column(DateTime)
+    examples = Column(JSON)  # Store list of similar questions
+    theme = Column(String, nullable=True)  # Common theme of the questions 

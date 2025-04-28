@@ -59,12 +59,29 @@ class RAGSystem:
         if model == "auto":
             model = "gpt-4o-mini"
         try:
+            additional_context = """
+            Also refer to the following websites depending on the question:
+            
+            Solana Delegation criteria: https://solana.org/delegation-criteria
+            
+            """
             logger.info(f"Generating response using {model}")
+            prompt = f"""
+                    You are a helpful assistant that answers questions about Solana blockchain.
+
+                    Context:
+                    {context}
+
+                    {additional_context}
+
+                    Question:
+                    {question}
+                    """
             response = self.openai_client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": "You are a helpful assistant that answers questions about Solana blockchain."},
-                    {"role": "user", "content": f"Context: {context}\n\nQuestion: {question}"}
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": question}
                 ],
                 temperature=0.7,
                 max_tokens=1000

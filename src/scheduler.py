@@ -8,6 +8,8 @@ from database.models import Message, User
 from database.connection import SessionLocal
 import time as time_module
 from loguru import logger
+from src.rag_system import RAGSystem
+from src.question_analyzer import QuestionAnalyzer
 
 load_dotenv()
 
@@ -16,6 +18,8 @@ class MessageScheduler:
         self.bot_manager = BotManager()
         self.api_url = os.getenv('MESSAGE_API_URL')
         self.schedule_time = time(hour=0, minute=0)  # Default to midnight
+        self.rag_system = RAGSystem()
+        self.question_analyzer = QuestionAnalyzer()
         
     def fetch_messages_from_api(self, 
                               params: Optional[Dict[str, Any]] = None, 
@@ -44,7 +48,7 @@ class MessageScheduler:
         return response.json()
     
     def process_messages(self, messages: List[Dict[str, Any]]):
-        """Process messages and store them in the database"""
+        """Process messages and store them in the postgres database"""
         db = SessionLocal()
         try:
             # First, collect all unique users
@@ -102,6 +106,13 @@ class MessageScheduler:
 
             db.commit()
             logger.info(f"Successfully processed {len(messages)} messages")
+            
+            # Store messages in Pinecone
+            self.rag_system.process_and_store_messages(messages)
+            
+            # Process questions from new messages
+            self.question_analyzer.process_and_store_questions(messages)
+            
         except Exception as e:
             db.rollback()
             logger.error(f"Error processing messages: {str(e)}")
@@ -110,7 +121,7 @@ class MessageScheduler:
             db.close()
 
     def fetch_messages_from_database(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """Fetch messages from the database"""
+        """Fetch messages from the postgres database"""
         db = SessionLocal()
         try:
             # Fetch messages with author relationship
@@ -135,6 +146,17 @@ class MessageScheduler:
         finally:
             db.close()
 
+    def run_scheduled_task(self):
+        """Run the scheduled task to fetch and process messages"""
+        try:
+            logger.info("Running scheduled message processing")
+            messages = self.fetch_messages_from_api()
+            self.process_messages(messages)
+            return len(messages)
+        except Exception as e:
+            logger.error(f"Error in scheduled task: {e}")
+            raise e
+
     def run_daily_task(self):
         """Run the daily message processing task"""
         logger.info("Starting daily task scheduler")
@@ -142,9 +164,7 @@ class MessageScheduler:
             now = datetime.now().time()
             if now.hour == self.schedule_time.hour and now.minute == self.schedule_time.minute:
                 try:
-                    logger.info("Running scheduled message processing")
-                    messages = self.fetch_messages_from_api()
-                    self.process_messages(messages)
+                    self.run_scheduled_task()
                 except Exception as e:
                     logger.error(f"Error in daily task: {e}")
                     

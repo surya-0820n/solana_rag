@@ -8,6 +8,10 @@ from src.scheduler import MessageScheduler
 import os
 from dotenv import load_dotenv
 import requests
+from datetime import datetime, timedelta
+from sqlalchemy.orm import Session
+from src.database import SessionLocal
+from src.models import QuestionGroup
 
 load_dotenv()
 
@@ -195,6 +199,18 @@ def fetch_twitter(username: str, days_back: int = 30):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/run-scheduler-task")
+def run_scheduler_task():
+    """Manually run the scheduler task to fetch messages and update both PostgreSQL and Pinecone"""
+    try:
+        processed_count = scheduler.run_scheduled_task()
+        return {
+            "status": "success",
+            "message": f"Successfully processed {processed_count} messages and updated both PostgreSQL and Pinecone"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.on_event("startup")
 async def startup_event():
     """Start the message scheduler on API startup"""
@@ -204,6 +220,30 @@ async def startup_event():
 async def shutdown_event():
     """Cleanup resources on API shutdown"""
     await scheduler.cleanup()
+
+@app.get("/common-questions")
+def get_common_questions(time_window_days: int = 30):
+    """Get commonly asked questions from Discord messages"""
+    try:
+        db = SessionLocal()
+        cutoff_date = datetime.now() - timedelta(days=time_window_days)
+        top_questions = db.query(QuestionGroup)\
+            .filter(QuestionGroup.last_seen >= cutoff_date)\
+            .order_by(QuestionGroup.count.desc())\
+            .limit(10)\
+            .all()
+            
+        return [{
+            'question': group.representative_question,
+            'count': group.count,
+            'examples': group.examples,
+            'first_seen': group.first_seen,
+            'last_seen': group.last_seen
+        } for group in top_questions]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
 
 if __name__ == "__main__":
     import uvicorn
