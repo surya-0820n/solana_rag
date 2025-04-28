@@ -1,6 +1,5 @@
-from typing import List, Dict, Any
-from .text_processor import TextProcessor
-from .twitter_processor import TwitterProcessor
+from typing import List, Dict, Any, Tuple, Optional
+from .text_processor import DiscordTextProcessor, TwitterProcessor
 import os
 from tqdm import tqdm
 from loguru import logger
@@ -10,7 +9,8 @@ import httpx
 
 class RAGSystem:
     def __init__(self):
-        self.text_processor = TextProcessor()
+        """Initialize the RAG system with text processors for different data sources"""
+        self.text_processor = DiscordTextProcessor()
         self.twitter_processor = TwitterProcessor()
         self.use_openai = bool(os.getenv('OPENAI_API_KEY'))
         self.openai_client = None
@@ -33,31 +33,85 @@ class RAGSystem:
         
         logger.info("RAGSystem initialized with sentence-transformers")
         
-    def format_context(self, discord_matches: List[Dict[str, Any]], tweet_matches: List[Dict[str, Any]]) -> str:
-        """Format retrieved context from both Discord and Twitter"""
-        context = "Here are some relevant excerpts:\n\n"
+    def process_and_store_messages(self, messages: List[Dict[str, Any]]):
+        """Process and store messages in Pinecone"""
+        if not messages:
+            return
+            
+        # Process messages
+        processed_messages = [
+            self.text_processor.process_message(message)
+            for message in messages
+        ]
         
-        if discord_matches:
-            context += "From Discord discussions:\n\n"
-            for i, match in enumerate(discord_matches, 1):
-                context += f"{i}. {match.metadata['text']}\n"
-                context += f"   - From: {match.metadata['author']}\n"
-                context += f"   - Date: {match.metadata['timestamp']}\n\n"
-                
-        if tweet_matches:
-            context += "From Twitter:\n\n"
-            for i, tweet in enumerate(tweet_matches, 1):
-                context += f"{i}. {tweet['text']}\n"
-                context += f"   - From: @{tweet['author']}\n"
-                context += f"   - Date: {tweet['created_at']}\n"
-                context += f"   - Likes: {tweet['metrics']['like_count']}\n\n"
-                
-        return context
-    
-    def generate_openai_response(self, question: str, context: str, model: str = "gpt-4o-mini") -> str:
-        """Generate response using OpenAI's GPT-4"""
+        # Store in Pinecone
+        self.text_processor.upsert_to_pinecone(processed_messages)
+        
+    def generate_response(self, query: str, model: str = "auto") -> str:
+        """Generate a response to a query using the RAG system"""
+        # Search for similar messages
+        discord_matches = self.text_processor.search_similar_messages(query)
+        tweet_matches = self.twitter_processor.search_similar_tweets(query)
+        
+        # Combine and format context
+        context = self._format_context(discord_matches, tweet_matches)
+        
+        # Generate response using the appropriate model
         if model == "auto":
-            model = "gpt-4o-mini"
+            # Choose model based on context length
+            if len(context) > 2000:
+                model = "openai"
+            else:
+                model = "sentence-transformers"
+                
+        if model == "openai":
+            return self._generate_openai_response(query, context)
+        else:
+            return self._generate_local_response(query, context)
+            
+    def generate_response_with_context(
+        self, 
+        query: str, 
+        model: str = "auto",
+        top_k: int = 3,
+        data_source_priority: str = "both"
+    ) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Generate a response with relevant context from both data sources"""
+        # Get matches based on priority
+        discord_matches = []
+        tweet_matches = []
+        
+        if data_source_priority in ["both", "discord"]:
+            discord_matches = self.text_processor.search_similar_messages(query, top_k)
+            
+        if data_source_priority in ["both", "twitter"]:
+            tweet_matches = self.twitter_processor.search_similar_tweets(query, top_k)
+            
+        # Generate response
+        response = self.generate_response(query, model)
+        
+        return response, discord_matches, tweet_matches
+        
+    def _format_context(self, discord_matches: List[Dict[str, Any]], tweet_matches: List[Dict[str, Any]]) -> str:
+        """Format matches into a context string"""
+        context_parts = []
+        
+        # Add Discord messages
+        if discord_matches:
+            context_parts.append("Relevant Discord messages:")
+            for match in discord_matches:
+                context_parts.append(f"- {match.metadata['text']} (by {match.metadata['author']})")
+                
+        # Add tweets
+        if tweet_matches:
+            context_parts.append("\nRelevant tweets:")
+            for match in tweet_matches:
+                context_parts.append(f"- {match.metadata['text']} (by {match.metadata['author']})")
+                
+        return "\n".join(context_parts)
+        
+    def _generate_openai_response(self, query: str, context: str) -> str:
+        """Generate response using OpenAI's API"""
         try:
             additional_context = """
             Also refer to the following websites depending on the question:
@@ -65,7 +119,7 @@ class RAGSystem:
             Solana Delegation criteria: https://solana.org/delegation-criteria
             
             """
-            logger.info(f"Generating response using {model}")
+            logger.info(f"Generating response using OpenAI")
             prompt = f"""
                     You are a helpful assistant that answers questions about Solana blockchain.
 
@@ -75,30 +129,30 @@ class RAGSystem:
                     {additional_context}
 
                     Question:
-                    {question}
+                    {query}
                     """
             response = self.openai_client.chat.completions.create(
-                model=model,
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": prompt},
-                    {"role": "user", "content": question}
+                    {"role": "user", "content": query}
                 ],
                 temperature=0.7,
                 max_tokens=1000
             )
             answer = response.choices[0].message.content
-            logger.info("Successfully generated response using GPT-4")
+            logger.info("Successfully generated response using OpenAI")
             return answer
         except Exception as e:
             logger.error(f"Error generating OpenAI response: {str(e)}")
             raise
-    
-    def generate_sentence_transformers_response(self, question: str, context: str) -> str:
-        """Generate response using sentence-transformers"""
+        
+    def _generate_local_response(self, query: str, context: str) -> str:
+        """Generate response using local sentence-transformers model"""
         try:
             logger.info("Generating response using sentence-transformers")
             # Combine context and question
-            prompt = f"Context: {context}\n\nQuestion: {question}\n\nAnswer:"
+            prompt = f"Context: {context}\n\nQuestion: {query}\n\nAnswer:"
             
             # Generate response using the model
             # Note: This is a simple implementation. You might want to use a more sophisticated approach
@@ -110,79 +164,4 @@ class RAGSystem:
             return answer
         except Exception as e:
             logger.error(f"Error generating sentence-transformers response: {str(e)}")
-            raise
-    
-    def generate_response(self, question: str, model: str = "auto") -> str:
-        """Generate response using the best available model"""
-        try:
-            # Get relevant context from Pinecone
-            context = self.text_processor.get_relevant_context(question)
-            
-            return self.generate_openai_response(question, context, model)
-        except Exception as e:
-            logger.error(f"Error generating response: {str(e)}")
-            raise
-    
-    def process_and_store_messages(self, messages: List[Any]):
-        """Process messages and store them in the vector database"""
-        for message in tqdm(messages, desc="Processing messages"):
-            # Convert SQLAlchemy Message to dictionary if needed
-            if not isinstance(message, dict):
-                message_dict = {
-                    'id': message.id,
-                    'content': message.content,
-                    'author': {
-                        'id': message.author_id,
-                        'username': message.author.username if message.author else 'Unknown'
-                    },
-                    'timestamp': message.timestamp,
-                    'channel_id': message.channel_id
-                }
-                message = message_dict
-
-            chunks = self.text_processor.process_message(message)
-            self.text_processor.upsert_to_pinecone(chunks)
-    
-    def generate_response_with_context(self, question: str, model: str = "auto", top_k: int = 3, 
-                                     data_source_priority: str = "both") -> tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """
-        Generate response and return both the answer and relevant context from both sources
-        
-        Args:
-            question (str): The question to answer
-            model (str): The model to use for generation
-            top_k (int): Number of relevant items to retrieve from each source
-            data_source_priority (str): Which data source to prioritize ("discord", "twitter", or "both")
-            
-        Returns:
-            tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]: The answer and relevant context from both sources
-        """
-        try:
-            # Get relevant context from both sources
-            discord_matches = []
-            tweet_matches = []
-            
-            if data_source_priority in ["discord", "both"]:
-                discord_matches = self.text_processor.index.query(
-                    vector=self.model.encode(question).tolist(),
-                    top_k=top_k,
-                    include_metadata=True
-                ).matches
-                
-            if data_source_priority in ["twitter", "both"]:
-                tweet_matches = self.twitter_processor.get_relevant_tweets(question, top_k)
-            
-            # Format context for LLM
-            context = self.format_context(discord_matches, tweet_matches)
-            
-            # Generate response
-            if model == "sentence-transformers":
-                answer = self.generate_sentence_transformers_response(question, context)
-            else:
-                answer = self.generate_openai_response(question, context, model)
-                
-            return answer, discord_matches, tweet_matches
-            
-        except Exception as e:
-            logger.error(f"Error generating response with context: {str(e)}")
             raise 

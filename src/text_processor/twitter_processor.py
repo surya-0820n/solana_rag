@@ -1,15 +1,8 @@
 from typing import List, Dict, Any
-from sentence_transformers import SentenceTransformer
-import os
-from dotenv import load_dotenv
 from loguru import logger
-from pinecone import Pinecone
-import uuid
-import re
+import os
 from .base_processor import BaseTextProcessor
-
-# Load environment variables
-load_dotenv()
+import re
 
 class TwitterProcessor(BaseTextProcessor):
     def __init__(self):
@@ -22,12 +15,15 @@ class TwitterProcessor(BaseTextProcessor):
         
     def process_tweet(self, tweet: Dict[str, Any]) -> Dict[str, Any]:
         """Process a single tweet for storage in Pinecone"""
+        # Clean tweet text
+        cleaned_text = self.clean_tweet_text(tweet['text'])
+        
         # Create embedding for the tweet text
-        embedding = self.create_embeddings([tweet['text']])[0]
+        embedding = self.create_embeddings([cleaned_text])[0]
         
         # Prepare metadata
         metadata = {
-            'text': tweet['text'],
+            'text': cleaned_text,
             'author': tweet['author']['username'],
             'timestamp': tweet['created_at'],
             'tweet_id': tweet['id'],
@@ -91,35 +87,4 @@ class TwitterProcessor(BaseTextProcessor):
         # Remove extra whitespace
         text = re.sub(r'\s+', ' ', text)
         
-        return text.strip()
-        
-    def get_relevant_tweets(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
-        """Get relevant tweets from Pinecone for a given query"""
-        try:
-            # Generate query embedding
-            query_embedding = self.model.encode(query).tolist()
-            
-            # Search Pinecone
-            results = self.index.query(
-                vector=query_embedding,
-                top_k=top_k,
-                include_metadata=True
-            )
-            
-            # Format results
-            relevant_tweets = []
-            for match in results.matches:
-                relevant_tweets.append({
-                    'text': match.metadata['text'],
-                    'author': match.metadata['author'],
-                    'created_at': match.metadata['created_at'],
-                    'metrics': match.metadata['metrics'],
-                    'score': match.score
-                })
-            
-            logger.info(f"Retrieved {len(relevant_tweets)} relevant tweets")
-            return relevant_tweets
-            
-        except Exception as e:
-            logger.error(f"Error retrieving relevant tweets: {str(e)}")
-            raise 
+        return text.strip() 
