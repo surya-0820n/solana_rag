@@ -55,7 +55,7 @@ class TwitterProcessor(BaseTextProcessor):
         batch_size = 100
         for i in range(0, len(vectors), batch_size):
             batch = vectors[i:i + batch_size]
-            self.pc.upsert(vectors=batch)
+            self.index.upsert(vectors=batch)
             
         logger.info(f"Successfully upserted {len(vectors)} tweets to Pinecone")
         
@@ -65,7 +65,7 @@ class TwitterProcessor(BaseTextProcessor):
         query_embedding = self.create_embeddings([query])[0]
         
         # Search in Pinecone
-        results = self.pc.query(
+        results = self.index.query(
             vector=query_embedding,
             top_k=top_k,
             include_metadata=True

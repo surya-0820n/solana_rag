@@ -1,11 +1,12 @@
 from typing import List, Dict, Any, Tuple, Optional
-from .text_processor import DiscordTextProcessor, TwitterProcessor
+from .text_processor.discord_processor import DiscordTextProcessor
+from .text_processor.twitter_processor import TwitterProcessor
 import os
 from tqdm import tqdm
 from loguru import logger
-from sentence_transformers import SentenceTransformer
+from .utils.singletons import get_model
 from openai import OpenAI
-import httpx
+import numpy as np
 
 class RAGSystem:
     def __init__(self):
@@ -16,20 +17,16 @@ class RAGSystem:
         self.openai_client = None
         if self.use_openai:
             try:
-                # Create a custom HTTP client without proxy settings
-                http_client = httpx.Client()
-                self.openai_client = OpenAI(
-                    api_key=os.getenv('OPENAI_API_KEY'),
-                    http_client=http_client
-                )
+                # Initialize OpenAI client with API key
+                self.openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
                 logger.info("Successfully initialized OpenAI client")
             except Exception as e:
                 logger.error(f"Failed to initialize OpenAI client: {str(e)}")
                 raise
         logger.info(f"RAG System initialized with OpenAI support: {self.use_openai}")
         
-        # Load sentence-transformers model
-        self.model = SentenceTransformer(os.getenv('EMBEDDING_MODEL', 'all-MiniLM-L6-v2'))
+        # Get model from singleton
+        self.model = get_model()
         
         logger.info("RAGSystem initialized with sentence-transformers")
         
@@ -98,15 +95,15 @@ class RAGSystem:
         
         # Add Discord messages
         if discord_matches:
-            context_parts.append("Relevant Discord messages:")
+            context_parts.append("Discord Messages:")
             for match in discord_matches:
-                context_parts.append(f"- {match.metadata['text']} (by {match.metadata['author']})")
+                context_parts.append(f"- {match['metadata']['text']}")
                 
-        # Add tweets
+        # Add Twitter messages
         if tweet_matches:
-            context_parts.append("\nRelevant tweets:")
+            context_parts.append("\nTwitter Messages:")
             for match in tweet_matches:
-                context_parts.append(f"- {match.metadata['text']} (by {match.metadata['author']})")
+                context_parts.append(f"- {match['metadata']['text']}")
                 
         return "\n".join(context_parts)
         
@@ -121,18 +118,25 @@ class RAGSystem:
             """
             logger.info(f"Generating response using OpenAI")
             prompt = f"""
-                    You are a helpful assistant that answers questions about Solana blockchain.
-
-                    Context:
+                    You are a knowledgeable and helpful assistant specializing in Solana blockchain. 
+                    Your goal is to provide clear, accurate, and helpful answers to questions about Solana.
+                    
+                    You have access to the following information:
                     {context}
-
                     {additional_context}
-
+                    
+                    Guidelines for your response:
+                    1. Answer naturally and conversationally, as if you're explaining to a friend
+                    2. Don't directly quote or reference the context - use it to inform your answer
+                    3. If you're not sure about something, say so
+                    4. Keep your answers clear and concise
+                    5. If relevant, you can use information from the website in the context
+                    
                     Question:
                     {query}
                     """
             response = self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4-turbo-preview",
                 messages=[
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": query}
@@ -146,22 +150,18 @@ class RAGSystem:
         except Exception as e:
             logger.error(f"Error generating OpenAI response: {str(e)}")
             raise
-        
+            
     def _generate_local_response(self, query: str, context: str) -> str:
         """Generate response using local sentence-transformers model"""
-        try:
-            logger.info("Generating response using sentence-transformers")
-            # Combine context and question
-            prompt = f"Context: {context}\n\nQuestion: {query}\n\nAnswer:"
+        # Create embeddings for query and context
+        query_embedding = self.model.encode(query)
+        context_embedding = self.model.encode(context)
+        
+        # Calculate similarity
+        similarity = np.dot(query_embedding, context_embedding) / (np.linalg.norm(query_embedding) * np.linalg.norm(context_embedding))
+        
+        if similarity < 0.5:
+            return "I don't have enough relevant information to answer this question."
             
-            # Generate response using the model
-            # Note: This is a simple implementation. You might want to use a more sophisticated approach
-            # like using a smaller language model or a different strategy for sentence-transformers
-            answer = "Based on the provided context:\n\n"
-            answer += context  # For now, we'll return the context as the answer
-            answer += "\n\nPlease refer to the above context for the answer to your question."
-            
-            return answer
-        except Exception as e:
-            logger.error(f"Error generating sentence-transformers response: {str(e)}")
-            raise 
+        # For local model, we'll just return the most relevant context
+        return f"Based on the available information: {context}" 

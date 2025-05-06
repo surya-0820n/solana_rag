@@ -5,6 +5,7 @@ from src.rag_system import RAGSystem
 from src.discord_fetcher import DiscordFetcher
 from src.bot_manager import BotManager
 from src.scheduler import MessageScheduler
+from src.question_analyzer import QuestionAnalyzer
 import os
 from dotenv import load_dotenv
 import requests
@@ -18,7 +19,7 @@ app = FastAPI(title="Solana RAG API")
 rag_system = RAGSystem()
 bot_manager = BotManager()
 scheduler = MessageScheduler()
-
+question_analyzer = QuestionAnalyzer()
 class Question(BaseModel):
     text: str
     model: Optional[str] = "auto"  # "auto", "openai", or "sentence-transformers"
@@ -79,8 +80,8 @@ def ask_question(question: Question):
 def update_knowledge_base():
     """Fetch messages from Postgres Database and update the pinecone knowledge base"""
     try:
-        bot = DiscordFetcher()
-        bot.start(os.getenv('DISCORD_TOKEN'))
+        # bot = DiscordFetcher()
+        # bot.start(os.getenv('DISCORD_TOKEN'))
         
         # channel_id = int(os.getenv('SOLANA_CHANNEL_ID'))
         # messages = bot.fetch_channel_messages(channel_id)  
@@ -89,8 +90,9 @@ def update_knowledge_base():
 
         # Process and store messages in the pinecone database
         rag_system.process_and_store_messages(messages)
+        question_analyzer.process_and_store_questions(messages)
         
-        bot.close()
+        # bot.close()
         return {"status": "success", "message": f"Processed {len(messages)} messages"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -121,13 +123,14 @@ def setup_mirror_channel(request: MirrorChannelRequest):
 
 @app.post("/process-messages")
 def process_messages():
-    """Manually trigger message processing from the API"""
+    """Manually trigger message processing from the API."""
     try:
         messages = scheduler.fetch_messages_from_api(
             headers={"Authorization": os.getenv('MESSAGE_API_TOKEN')},
             params={"limit": 100}
         )
         scheduler.process_messages(messages)
+        question_analyzer.process_and_store_questions(messages)
         return {
             "status": "success",
             "message": f"Processed {len(messages)} messages"

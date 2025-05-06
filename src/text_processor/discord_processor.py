@@ -2,6 +2,7 @@ from typing import List, Dict, Any
 from loguru import logger
 from .base_processor import BaseTextProcessor
 import os
+import openai
 
 class DiscordTextProcessor(BaseTextProcessor):
     def __init__(self):
@@ -51,7 +52,7 @@ class DiscordTextProcessor(BaseTextProcessor):
         batch_size = 100
         for i in range(0, len(vectors), batch_size):
             batch = vectors[i:i + batch_size]
-            self.pc.upsert(vectors=batch)
+            self.index.upsert(vectors=batch)
             
         logger.info(f"Successfully upserted {len(vectors)} messages to Pinecone")
         
@@ -61,7 +62,7 @@ class DiscordTextProcessor(BaseTextProcessor):
         query_embedding = self.create_embeddings([query])[0]
         
         # Search in Pinecone
-        results = self.pc.query(
+        results = self.index.query(
             vector=query_embedding,
             top_k=top_k,
             include_metadata=True
