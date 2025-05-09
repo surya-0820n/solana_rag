@@ -20,6 +20,11 @@ class MessageScheduler:
         self.schedule_time = time(hour=0, minute=0)  # Default to midnight
         self.rag_system = RAGSystem()
         self.question_analyzer = QuestionAnalyzer()
+        self.chanels = {
+            "general-tech": 926762104667648003,
+            "validator": 1086004447647367208,
+            "dev": 1016009827367010354
+        }
         
     def fetch_messages_from_api(self, 
                               params: Optional[Dict[str, Any]] = None, 

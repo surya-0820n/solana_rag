@@ -14,21 +14,15 @@ class TwitterFetcher:
         }
         logger.info("TwitterFetcher initialized with Bearer Token")
 
-    def fetch_user_tweets(self, username: str, days_back: int = 7):
-        # 1. Get user ID
-        user_url = f"https://api.twitter.com/2/users/by/username/{username}"
-        user_resp = requests.get(user_url, headers=self.headers)
-        user_resp.raise_for_status()
-        user_id = user_resp.json()['data']['id']
-
-        # 2. Get tweets
+    def fetch_user_tweets(self, username: str, hours_back: int = 1):
         end_time = datetime.utcnow()
-        start_time = end_time - timedelta(days=days_back)
+        start_time = end_time - timedelta(hours=hours_back)
         start_time_str = start_time.replace(microsecond=0).isoformat() + 'Z'
         end_time_str = end_time.replace(microsecond=0).isoformat() + 'Z'
         tweets_url = (
-            f"https://api.twitter.com/2/users/{user_id}/tweets"
-            f"?max_results=100"
+            "https://api.twitter.com/2/tweets/search/recent"
+            f"?query=from:{username}"
+            f"&max_results=10"
             f"&start_time={start_time_str}"
             f"&end_time={end_time_str}"
             f"&tweet.fields=created_at,public_metrics,entities"
