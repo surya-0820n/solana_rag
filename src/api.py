@@ -232,7 +232,11 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup resources on API shutdown"""
-    await scheduler.cleanup()
+    if scheduler is not None:
+        try:
+            await scheduler.cleanup()
+        except Exception as e:
+            print(f"Error during scheduler cleanup: {e}")
 
 @app.get("/common-questions")
 def get_common_questions(time_window_days: int = 30):
