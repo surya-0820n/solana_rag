@@ -1,6 +1,7 @@
 from typing import List, Dict, Any, Tuple, Optional
 from .text_processor.discord_processor import DiscordTextProcessor
 from .text_processor.twitter_processor import TwitterProcessor
+from .prompts.system_prompts import OPENAI_SYSTEM_PROMPT
 import os
 from tqdm import tqdm
 from loguru import logger
@@ -110,40 +111,10 @@ class RAGSystem:
     def _generate_openai_response(self, query: str, context: str) -> str:
         """Generate response using OpenAI's API"""
         try:
-            additional_context = """
-            Also refer to the following websites depending on the question:
-            
-            Solana Delegation criteria: https://solana.org/delegation-criteria
-            Solana Hardware Compatibility: https://solanahcl.org/
-            Solana Official Documentation: https://solana.com/docs
-            Agave Validator Documentation: https://docs.anza.xyz/
-            """
             logger.info(f"Generating response using OpenAI")
-            prompt = f"""
-                    You are a knowledgeable and helpful assistant specializing in Solana blockchain. 
-                    Your goal is to provide clear, accurate, and helpful answers to questions about Solana.
-                    
-                    You have access to the following information:
-                    {context}
-    
-                    {additional_context}
-                    
-                    GUIDELINES for your response:
-                    1. Answer naturally and conversationally, as if you're explaining to a friend
-                    2. Don't directly quote or reference the context - use it to inform your answer
-                    3. If you're not sure about something, say so
-                    4. Keep your answers clear and concise
-                    5. If relevant, you can use information from the websites in the context
-                    6. If the question is very nuanced, you deep dive and use the websites to provide more information.
-                    7. If you find different information from different sources, stick to the latest information and provide a link to the source.
-                    
-
-                    Give CLEAR and CONCISE answer, don't be verbose. Your answer should NOT be big paragraph, but bullet points and MUST have relevant metrics
-                    Question:
-                    {query}
-                    """
+            prompt = OPENAI_SYSTEM_PROMPT.format(context=context, query=query)
             response = self.openai_client.chat.completions.create(
-                model="gpt-4-turbo-preview",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": query}
