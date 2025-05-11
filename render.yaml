@@ -15,13 +15,27 @@ services:
         sync: false
       - key: PINECONE_ENVIRONMENT
         sync: false
+      - key: PINECONE_INDEX_NAME
+        sync: false
       - key: DISCORD_TOKEN
         sync: false
-      - key: TWITTER_API_KEY
+      - key: SOLANA_CHANNEL_ID
         sync: false
-      - key: TWITTER_API_SECRET
+      - key: X_API_KEY
         sync: false
-      - key: TWITTER_ACCESS_TOKEN
+      - key: X_API_SECRET
         sync: false
-      - key: TWITTER_ACCESS_TOKEN_SECRET
+      - key: X_ACCESS_TOKEN
+        sync: false
+      - key: X_ACCESS_TOKEN_SECRET
+        sync: false
+      - key: X_BEARER_TOKEN
+        sync: false
+      - key: MESSAGE_API_URL
+        sync: false
+      - key: MESSAGE_API_TOKEN
+        sync: false
+      - key: MIRROR_SCHEDULE_HOUR
+        sync: false
+      - key: MIRROR_SCHEDULE_MINUTE
         sync: false 
