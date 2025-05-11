@@ -21,7 +21,12 @@ app = FastAPI(title="Solana RAG API")
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://soul-search-ui.vercel.app", "http://localhost:3000"],
+    allow_origins=[
+        "https://soul-search-ui.vercel.app",
+        "https://soul-search-ui-git-main-surya-0820ns-projects.vercel.app",
+        "https://soul-search-ps1wv0ib3-surya-0820ns-projects.vercel.app",
+        "http://localhost:3000"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
